@@ -43,6 +43,12 @@ variable "storage_account_id" {
 }
 
 
+variable "stac_webapp_id" {
+  type = string
+}
+
+
+
 variable "storage_account_name" {
   type = string
   default = "stac_webapp"
