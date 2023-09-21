@@ -42,12 +42,8 @@ variable "storage_account_id" {
   type = string
 }
 
-variable "storage_account_name1" {
-  type = string
-  default ="storage"
-}
 
-variable "storage_account_name2" {
+variable "storage_account_name" {
   type = string
   default = "stac_webapp"
 }

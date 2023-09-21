@@ -124,7 +124,7 @@ resource "azurerm_private_dns_zone_virtual_network_link" "st1-dns-zone-to-vnet-l
 
 
 resource "azurerm_private_dns_a_record" "st1filerecord" {
-  name                = var.storage_account1_name
+  name                = var.storage_account_name
   zone_name           = azurerm_private_dns_zone.pv_st1_dns.name
   resource_group_name = var.resource_group_name
   ttl                 = 300
