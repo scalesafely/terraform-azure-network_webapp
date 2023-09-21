@@ -1,104 +1,148 @@
-resource "azurerm_service_plan" "app_service_plan" {
-  name                = var.app_service_plan_name
+##################################################################################
+#                              Vnet & Subnets                                    #
+##################################################################################
+resource "azurerm_virtual_network" "Vnet" {
+  name                = var.vnet_name
   location            = var.location
   resource_group_name = var.resource_group_name
-  os_type             = "Linux"
-  #reserved            =zz
-  sku_name = "P2v2"
+  address_space       = var.vnet_address_space
 }
 
-resource "azurerm_linux_web_app" "app" {
-  name                      = var.app_name
-  location                  = var.location
-  resource_group_name       = var.resource_group_name
-  service_plan_id           = azurerm_service_plan.app_service_plan.id
-  virtual_network_subnet_id = azurerm_subnet.web_subnet.id
-  client_affinity_enabled   = true
-
-  #app_settings = {
-  # DRUPAL_image       = "cnrgacr.azurecr.io/drupal"
-  # DRUPAL_image_tag = "latest"
-  #}
-
-
-  identity {
-    type         = "SystemAssigned"
-    identity_ids = []
-
-  }
-  #app_settings = {
-
-  # "WEBSITES_ENABLE_APP_SERVICE_STORAGE" = "false"
-  # }
-
-  site_config {
-    always_on                               = true
-    scm_minimum_tls_version                 = "1.2"
-    ftps_state                              = "FtpsOnly"
-    use_32_bit_worker                       = false
-    container_registry_use_managed_identity = true
-    # container_registry_managed_identity_client_id = azurerm_linux_web_app.app.identity.0.principal_id
-
-    application_stack {
-      docker_image     = var.docker_image_name
-      docker_image_tag = var.docker_image_tag_name
-    }
-  }
-  app_settings = {
-
-    MYSQL_DATABASE   = azurerm_mysql_database.database.name
-    MYSQL_USERNAME   = "${azurerm_mysql_server.mysql.administrator_login}@${azurerm_mysql_server.mysql.name}"
-    MYSQL_PASSWORD   = azurerm_mysql_server.mysql.administrator_login_password
-    MYSQL_HOST       = azurerm_mysql_server.mysql.fqdn
-    DRUPAL_SITE_NAME = var.DRUPAL_SITE_NAME
-
-    REDIS_HOSTNAME   = "${azurerm_private_dns_a_record.redisrecord.fqdn}"
-    REDIS_PORT       = "${azurerm_redis_cache.redis.port}"
-    REDIS_PASSWORD   = "${azurerm_redis_cache.redis.primary_access_key}"
-
-    DOCKER_REGISTRY_SERVER_URL      = var.DOCKER_REGISTRY_SERVER_URL
-    DOCKER_REGISTRY_SERVER_USERNAME = var.DOCKER_REGISTRY_SERVER_USERNAME
-    DOCKER_REGISTRY_SERVER_PASSWORD = var.DOCKER_REGISTRY_SERVER_PASSWORD
-    SERVERALIAS                     = var.SERVERALIAS
-    SERVERNAME                      = var.SERVERNAME
-    WEBSITES_PORT                   = var.WEBSITES_PORT
-    DOCUMENTROOT                    = var.DOCUMENTROOT
-  }
-
-
-  storage_account {
-    access_key   = azurerm_storage_account.stac_webapp.primary_access_key
-    account_name = azurerm_storage_account.stac_webapp.name
-    name         = var.nameshare
-    share_name   = var.share_name
-    type         = "AzureFiles"
-    mount_path   = var.mount_path
-
-  }
-
+resource "azurerm_subnet" "data_subnet" {
+  name                 = var.data_subnet_name
+  resource_group_name  = var.resource_group_name
+  virtual_network_name = azurerm_virtual_network.Vnet.name
+  address_prefixes     = var.data_address_subnet_prefixes
 }
 
-resource "azurerm_storage_account" "stac_webapp" {
-  name                             = var.stac_webapp_name
-  location                         = var.location
-  resource_group_name              = var.resource_group_name
-  is_hns_enabled                   = true
-  account_tier                     = "Standard"
-  allow_nested_items_to_be_public  = false
-  cross_tenant_replication_enabled = true
-  min_tls_version                  = "TLS1_2"
-  account_replication_type         = "LRS"
-  network_rules {
-    default_action = "Allow"
-  }
-}
-
-resource "azurerm_storage_share" "shares" {
-  name                 = var.share_name
-  storage_account_name = azurerm_storage_account.stac_webapp.name
-  quota                = 100
-  access_tier          = "TransactionOptimized"
-  enabled_protocol     = "SMB"
+resource "azurerm_subnet" "web_subnet" {
+  name                 = var.web_subnet_name
+  resource_group_name  = var.resource_group_name
+  virtual_network_name = azurerm_virtual_network.Vnet.name
+  address_prefixes     = var.web_address_subnet_prefixes
 }
 
 
+##################################################################################
+#                               Private Endpoints                                #
+#################################################################################
+
+
+// Private Endpoint mysql
+resource "azurerm_private_dns_zone" "pv_dns" {
+name                = "mysql.database.azure.com"
+resource_group_name = var.resource_group_name
+}
+
+resource "azurerm_private_endpoint" "mysql-endpoint" {
+  name                = "mysql-endpoint"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  subnet_id           = azurerm_subnet.data_subnet.id
+
+  private_service_connection {
+    name                           = "mysql-pc"
+    private_connection_resource_id = var.mysql_resource_id
+    subresource_names              = ["mysqlServer"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                  = "default"
+     private_dns_zone_ids  = [azurerm_private_dns_zone.pv_dns.id]
+   }
+}
+
+
+//DNS Zones
+resource "azurerm_private_dns_zone" "pv_st1_dns" {
+  name                = "file.core.windows.net"
+  resource_group_name = var.resource_group_name
+}
+
+// Private Endpoint storage
+resource "azurerm_private_endpoint" "storage-endpoint" {
+  name                = "stc1-endpoint"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  subnet_id           = azurerm_subnet.data_subnet.id
+  private_service_connection {
+    name                           = "storage-pc2"
+    private_connection_resource_id = var.storage_account_id
+    subresource_names              = ["file"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                  = "default"
+     private_dns_zone_ids  = [azurerm_private_dns_zone.pv_st1_dns.id]
+   }
+}
+
+//DNS Zones
+resource "azurerm_private_dns_zone" "pv_st2_dns" {
+  name                = "blob.core.windows.net"
+  resource_group_name = var.resource_group_name
+}
+// Private Endpoint storage
+resource "azurerm_private_endpoint" "storage-endpoint2" {
+  name                = "stc2-endpoint"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  subnet_id           = azurerm_subnet.data_subnet.id
+  private_service_connection {
+    name                           = "storage-pc2"
+    private_connection_resource_id = var.storage_account_id
+    subresource_names              = ["file"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                  = "default"
+     private_dns_zone_ids  = [azurerm_private_dns_zone.pv_st2_dns.id]
+   }
+
+}
+
+
+
+
+# Create a Private DNS to VNET link
+resource "azurerm_private_dns_zone_virtual_network_link" "dns-zone-to-vnet-link" {
+  name                  = "vnet-link"
+  resource_group_name   = var.resource_group_name
+  private_dns_zone_name = azurerm_private_dns_zone.pv_dns.name
+  virtual_network_id    = azurerm_virtual_network.Vnet.id
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "st1-dns-zone-to-vnet-link" {
+  name                  = "st1-vnet-link"
+  resource_group_name   = var.resource_group_name
+  private_dns_zone_name = azurerm_private_dns_zone.pv_st_dns.name
+  virtual_network_id    = azurerm_virtual_network.Vnet.id
+}
+
+
+resource "azurerm_private_dns_a_record" "st1filerecord" {
+  name                = var.storage_account1_name
+  zone_name           = azurerm_private_dns_zone.pv_st_dns.name
+  resource_group_name = var.resource_group_name
+  ttl                 = 300
+  records             = [azurerm_private_endpoint.storage-endpoint.private_service_connection[0].private_ip_address]
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "st2-dns-zone-to-vnet-link" {
+  name                  = "st2-vnet-link"
+  resource_group_name   = var.resource_group_name
+  private_dns_zone_name = azurerm_private_dns_zone.pv_st2_dns.name
+  virtual_network_id    = azurerm_virtual_network.Vnet.id
+}
+
+
+resource "azurerm_private_dns_a_record" "st2filerecord" {
+  name                = var.storage_account2_name
+  zone_name           = azurerm_private_dns_zone.pv_st2_dns.name
+  resource_group_name = var.resource_group_name
+  ttl                 = 300
+  records             = [azurerm_private_endpoint.storage-endpoint.private_service_connection[0].private_ip_address]
+}
